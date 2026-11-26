@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Victorious-ComfyUI | Studio</title>
 <style>
-:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#101116;color:#f0f0f5}*{box-sizing:border-box}body{margin:0}header,main{max-width:1120px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid #30313b}h1,h2,p{margin:0 0 12px}h1{font-size:1.5rem}h2{font-size:1.2rem}a{color:#b7b3ff}small,.muted{color:#b3b5c2}main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.panel{background:#1b1c24;border:1px solid #30313b;border-radius:18px;padding:20px}label{display:block;margin:12px 0}input,textarea,select,button{font:inherit;border-radius:10px;border:1px solid #454653;background:#111219;color:inherit;padding:10px;width:100%}textarea{resize:vertical;min-height:85px}button{cursor:pointer;background:#a49af7;color:#14121f;font-weight:700;margin-top:10px}button.secondary{background:#282936;color:#f0f0f5}button:disabled{opacity:.5;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #b7b3ff;outline-offset:2px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}#status{white-space:pre-wrap;overflow-wrap:anywhere}#gallery img{display:block;width:100%;height:auto;border-radius:12px;margin-top:16px}#hardware{overflow-wrap:anywhere}@media(max-width:720px){main{grid-template-columns:1fr}header,main{padding:16px}}
+:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#101116;color:#f0f0f5}*{box-sizing:border-box}body{margin:0}header,main{max-width:1120px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid #30313b}h1,h2,p{margin:0 0 12px}h1{font-size:1.5rem}h2{font-size:1.2rem}a{color:#b7b3ff}small,.muted{color:#b3b5c2}main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.panel{background:#1b1c24;border:1px solid #30313b;border-radius:18px;padding:20px}label{display:block;margin:12px 0}input,textarea,select,button{font:inherit;border-radius:10px;border:1px solid #454653;background:#111219;color:inherit;padding:10px;width:100%}textarea{resize:vertical;min-height:85px}button{cursor:pointer;background:#a49af7;color:#14121f;font-weight:700;margin-top:10px}button.secondary{background:#282936;color:#f0f0f5}button:disabled{opacity:.5;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #b7b3ff;outline-offset:2px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}#status{white-space:pre-wrap;overflow-wrap:anywhere}#gallery img{display:block;width:100%;height:auto;border-radius:12px;margin-top:16px}#hardware,#character-status{overflow-wrap:anywhere}details{border:1px solid #454653;border-radius:12px;padding:12px;margin:12px 0}summary{cursor:pointer;font-weight:700}#reference-preview{max-width:100%;max-height:240px;border-radius:10px}#reference-preview[hidden]{display:none}@media(max-width:720px){main{grid-template-columns:1fr}header,main{padding:16px}}
 </style>
 <script src="/victorious-studio/studio.js" defer></script>
 </head>
@@ -19,6 +19,22 @@
 <button class="secondary" type="button" id="refresh">Refresh models and hardware</button>
 <label>Prompt<textarea id="positive" required maxlength="8000" placeholder="Describe your image"></textarea></label>
 <label>Negative prompt<textarea id="negative" maxlength="8000" placeholder="What should be avoided?"></textarea></label>
+<details open><summary>Character and reference settings</summary>
+<p class="muted">Optional. A compatible trained LoRA can improve identity consistency. Reference mode edits an image; it is not face-identity conditioning.</p>
+<label>Character profile<select id="character"><option value="">No saved profile</option></select></label>
+<label>Profile name<input id="character-name" maxlength="80" placeholder="Character name"></label>
+<label>Character description<textarea id="character-description" maxlength="2000" placeholder="Reusable appearance and traits"></textarea></label>
+<div class="fields"><button type="button" class="secondary" id="save-character">Save profile</button><button type="button" class="secondary" id="delete-character">Delete profile</button></div>
+<label>Character LoRA<select id="lora"><option value="">No LoRA</option></select></label>
+<label>LoRA strength<input id="lora-strength" type="number" min="0" max="2" step=".05" value="0.8" required></label>
+<label>Reference image<select id="reference"><option value="">No reference</option></select></label>
+<label>Add reference (PNG or JPEG, up to 10 MiB)<input id="reference-file" type="file" accept="image/png,image/jpeg"></label>
+<button type="button" class="secondary" id="upload-reference">Upload reference to this ComfyUI server</button>
+<img id="reference-preview" alt="Selected reference" hidden>
+<label>Denoise for reference mode<input id="denoise" type="number" min="0.05" max="1" step=".05" value=".45" required></label>
+<p class="muted">Reference mode uses batch size 1. Use only images you have permission to use. Profiles are saved in this browser; uploaded images remain on the server.</p>
+<p id="character-status" role="status" aria-live="polite"></p>
+</details>
 <div class="fields">
 <label>Width<input id="width" type="number" min="256" max="1536" step="64" value="512" required></label>
 <label>Height<input id="height" type="number" min="256" max="1536" step="64" value="512" required></label>
