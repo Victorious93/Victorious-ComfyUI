@@ -5,7 +5,11 @@ function buildGraph(s) {
     if (!Number.isFinite(value)||value<min||value>max||(value-min)%step!==0) throw new Error("Invalid "+name);
   }
   if(s.lora && (!Number.isFinite(s.loraStrength)||s.loraStrength<0||s.loraStrength>2)) throw new Error("Invalid LoRA strength");
-  if(s.reference && (s.batch!==1||!Number.isFinite(s.denoise)||s.denoise<.05||s.denoise>1)) throw new Error("Reference mode requires batch size 1 and denoise between .05 and 1.");
+  const identity=s.referenceMode==="identity";
+  if(identity && (!s.reference||!s.photomaker||s.mask||s.batch!==1))throw new Error("PhotoMaker requires one reference, one model, batch size 1 and no mask.");
+  if(s.mask && !s.reference)throw new Error("Inpainting requires a reference image.");
+  if(s.reference && !identity && (s.batch!==1||!Number.isFinite(s.denoise)||s.denoise<.05||s.denoise>1)) throw new Error("Reference mode requires batch size 1 and denoise between .05 and 1.");
+  if(s.upscale && s.upscale!=="resize" && !s.upscale.startsWith("model:"))throw new Error("Invalid enhancement option.");
   const graph={
     "1":{class_type:"CheckpointLoaderSimple",inputs:{ckpt_name:s.checkpoint}},
     "2":{class_type:"CLIPTextEncode",inputs:{clip:["1",1],text:s.positive}},
@@ -21,13 +25,36 @@ function buildGraph(s) {
     graph["3"].inputs.clip=["8",1];
     graph["5"].inputs.model=["8",0];
   }
-  if(s.reference){
+  if(s.reference)graph["9"]={class_type:"LoadImage",inputs:{image:s.reference}};
+  if(identity){
+    if(s.positive.length>180)throw new Error("Use a short PhotoMaker prompt (up to 180 characters including the character description).");
+    const clip=graph["2"].inputs.clip;
+    graph["12"]={class_type:"PhotoMakerLoader",inputs:{photomaker_model_name:s.photomaker}};
+    graph["2"]={class_type:"PhotoMakerEncode",inputs:{photomaker:["12",0],image:["9",0],clip,text:"person photomaker "+s.positive}};
+  }else if(s.reference){
     delete graph["4"];
-    graph["9"]={class_type:"LoadImage",inputs:{image:s.reference}};
     graph["10"]={class_type:"ImageScale",inputs:{image:["9",0],upscale_method:"lanczos",width:s.width,height:s.height,crop:"center"}};
     graph["11"]={class_type:"VAEEncode",inputs:{pixels:["10",0],vae:["1",2]}};
     graph["5"].inputs.latent_image=["11",0];
     graph["5"].inputs.denoise=s.denoise;
+    if(s.mask){
+      graph["13"]={class_type:"LoadImage",inputs:{image:s.mask}};
+      graph["14"]={class_type:"ImageScale",inputs:{image:["13",0],upscale_method:"nearest-exact",width:s.width,height:s.height,crop:"center"}};
+      graph["15"]={class_type:"ImageToMask",inputs:{image:["14",0],channel:"red"}};
+      graph["11"]={class_type:"VAEEncodeForInpaint",inputs:{pixels:["10",0],vae:["1",2],mask:["15",0],grow_mask_by:6}};
+      graph["16"]={class_type:"ImageCompositeMasked",inputs:{destination:["10",0],source:["6",0],mask:["15",0],x:0,y:0,resize_source:false}};
+      graph["7"].inputs.images=["16",0];
+    }
+  }
+  if(s.upscale){
+    const image=graph["7"].inputs.images;
+    if(s.upscale==="resize"){
+      graph["17"]={class_type:"ImageScaleBy",inputs:{image,upscale_method:"lanczos",scale_by:2}};
+    }else{
+      graph["18"]={class_type:"UpscaleModelLoader",inputs:{model_name:s.upscale.slice(6)}};
+      graph["17"]={class_type:"ImageUpscaleWithModel",inputs:{image,upscale_model:["18",0]}};
+    }
+    graph["7"].inputs.images=["17",0];
   }
   return graph;
 }
@@ -148,6 +175,14 @@ form.addEventListener("submit",async event=>{
     settings.denoise=byId("denoise").valueAsNumber;
     if(settings.lora && !availableLoras.includes(settings.lora))throw new Error("Selected LoRA is unavailable; refresh models.");
     if(settings.reference && !availableReferences.includes(settings.reference))throw new Error("Selected reference is unavailable; refresh models.");
+    settings.referenceMode=byId("reference-mode").value;
+    settings.photomaker=byId("photomaker").value;
+    settings.mask=byId("mask").value;
+    settings.upscale=byId("upscale").value;
+    if(settings.referenceMode==="identity" && (!photoCapabilities.identity || !photoModels.includes(settings.photomaker)))throw new Error("PhotoMaker nodes or selected weights unavailable.");
+    if(settings.mask && (!photoCapabilities.inpaint || !availableReferences.includes(settings.mask)))throw new Error("Mask or inpainting nodes unavailable.");
+    if(settings.upscale==="resize" && !photoCapabilities.resize)throw new Error("Resize node unavailable.");
+    if(settings.upscale.startsWith("model:") && (!photoCapabilities.upscale || !upscaleModels.includes(settings.upscale.slice(6))))throw new Error("Upscale model or node unavailable.");
     const prompt=buildGraph(settings);
     byId("gallery").replaceChildren();
     report("Submitting…");
@@ -169,7 +204,7 @@ cancel.addEventListener("click",async()=>{
   } catch(error){if(activeId===id)report("Cancellation not confirmed: "+error.message);}
   finally{cancelling=false;syncControls();}
 });
-refresh.addEventListener("click",()=>{refreshModels();refreshCharacterAssets();});
+refresh.addEventListener("click",()=>{refreshModels();refreshCharacterAssets();refreshPhotoAssets();});
 checkpoint.addEventListener("change",syncControls);
 
 const profileKey="victorious-studio.characters.v1";
@@ -235,6 +270,8 @@ profileSelect.addEventListener("change",()=>{
   byId("denoise").value=p?.denoise??.45;
   setAssetOptions(loraSelect,availableLoras,"No LoRA",p?.lora||"");
   setAssetOptions(referenceSelect,availableReferences,"No reference",p?.reference||"");
+  byId("mask").value="";
+  byId("reference-mode").value="edit";
   updateReference();
 });
 byId("save-character").addEventListener("click",()=>{
@@ -278,6 +315,7 @@ async function refreshCharacterAssets(){
   setAssetOptions(loraSelect,availableLoras,"No LoRA");
   setAssetOptions(referenceSelect,availableReferences,"No reference");
   previewReference();
+  setAssetOptions(byId("mask"),availableReferences,"No mask");
   assetsLoading=false;
   if(errors.length)characterReport(errors.join(". "));
 }
@@ -312,5 +350,36 @@ byId("upload-reference").addEventListener("click",async()=>{
   }catch(error){characterReport("Upload not confirmed: "+error.message);}
   finally{uploading=false;byId("upload-reference").disabled=false;}
 });
+
+let photoModels=[];
+let upscaleModels=[];
+let photoCapabilities={};
+let photoLoading=false;
+async function refreshPhotoAssets(){
+  if(photoLoading)return;
+  photoLoading=true;
+  const names=["PhotoMakerLoader","PhotoMakerEncode","UpscaleModelLoader","ImageUpscaleWithModel","ImageScaleBy","VAEEncodeForInpaint","ImageToMask","ImageCompositeMasked"];
+  const results=await Promise.allSettled(names.map(name=>api("/object_info/"+name)));
+  const info=Object.fromEntries(names.map((name,index)=>[name,results[index].value?.[name]]));
+  const pm=info.PhotoMakerLoader?.input?.required?.photomaker_model_name?.[0];
+  const up=info.UpscaleModelLoader?.input?.required?.model_name?.[0];
+  photoModels=Array.isArray(pm)?pm.filter(n=>typeof n==="string"):[];
+  upscaleModels=Array.isArray(up)?up.filter(n=>typeof n==="string"):[];
+  photoCapabilities={identity:!!(info.PhotoMakerLoader&&info.PhotoMakerEncode),upscale:!!(info.UpscaleModelLoader&&info.ImageUpscaleWithModel),resize:!!info.ImageScaleBy,inpaint:!!(info.VAEEncodeForInpaint&&info.ImageToMask&&info.ImageCompositeMasked)};
+  setAssetOptions(byId("photomaker"),photoModels,"Select installed PhotoMaker model");
+  const select=byId("upscale"), selected=select.value;
+  select.replaceChildren(new Option("No enhancement",""));
+  if(photoCapabilities.resize)select.add(new Option("2× Lanczos resize (not AI)","resize"));
+  if(photoCapabilities.upscale)for(const name of upscaleModels)select.add(new Option("AI: "+name,"model:"+name));
+  if(selected && !Array.from(select.options).some(o=>o.value===selected))select.add(new Option(selected+" (unavailable)",selected));
+  select.value=selected;
+  byId("photo-status").textContent=[
+    photoCapabilities.identity&&photoModels.length?"PhotoMaker weights found (compatibility unverified)":"PhotoMaker unavailable or no weights installed",
+    photoCapabilities.inpaint?"Inpainting nodes found":"Inpainting nodes unavailable",
+    photoCapabilities.upscale&&upscaleModels.length?upscaleModels.length+" upscale model(s) found":"No AI upscale models available"
+  ].join(" · ");
+  photoLoading=false;
+}
 refreshModels();
 refreshCharacterAssets();
+refreshPhotoAssets();
