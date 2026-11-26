@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Victorious-ComfyUI | Studio</title>
 <style>
-:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#101116;color:#f0f0f5}*{box-sizing:border-box}body{margin:0}header,main{max-width:1120px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid #30313b}h1,h2,p{margin:0 0 12px}h1{font-size:1.5rem}h2{font-size:1.2rem}a{color:#b7b3ff}small,.muted{color:#b3b5c2}main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.panel{background:#1b1c24;border:1px solid #30313b;border-radius:18px;padding:20px}label{display:block;margin:12px 0}input,textarea,select,button{font:inherit;border-radius:10px;border:1px solid #454653;background:#111219;color:inherit;padding:10px;width:100%}textarea{resize:vertical;min-height:85px}button{cursor:pointer;background:#a49af7;color:#14121f;font-weight:700;margin-top:10px}button.secondary{background:#282936;color:#f0f0f5}button:disabled{opacity:.5;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #b7b3ff;outline-offset:2px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}#status{white-space:pre-wrap;overflow-wrap:anywhere}#gallery img{display:block;width:100%;height:auto;border-radius:12px;margin-top:16px}#hardware,#character-status{overflow-wrap:anywhere}details{border:1px solid #454653;border-radius:12px;padding:12px;margin:12px 0}summary{cursor:pointer;font-weight:700}#reference-preview{max-width:100%;max-height:240px;border-radius:10px}#reference-preview[hidden]{display:none}@media(max-width:720px){main{grid-template-columns:1fr}header,main{padding:16px}}
+:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#101116;color:#f0f0f5}*{box-sizing:border-box}body{margin:0}header,main{max-width:1120px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid #30313b}h1,h2,p{margin:0 0 12px}h1{font-size:1.5rem}h2{font-size:1.2rem}a{color:#b7b3ff}small,.muted{color:#b3b5c2}main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.panel{background:#1b1c24;border:1px solid #30313b;border-radius:18px;padding:20px}label{display:block;margin:12px 0}input,textarea,select,button{font:inherit;border-radius:10px;border:1px solid #454653;background:#111219;color:inherit;padding:10px;width:100%}textarea{resize:vertical;min-height:85px}button{cursor:pointer;background:#a49af7;color:#14121f;font-weight:700;margin-top:10px}button.secondary{background:#282936;color:#f0f0f5}button:disabled{opacity:.5;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #b7b3ff;outline-offset:2px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}#status{white-space:pre-wrap;overflow-wrap:anywhere}#gallery img{display:block;width:100%;height:auto;border-radius:12px;margin-top:16px}#hardware,#character-status,#photo-status{overflow-wrap:anywhere}details{border:1px solid #454653;border-radius:12px;padding:12px;margin:12px 0}summary{cursor:pointer;font-weight:700}#reference-preview{max-width:100%;max-height:240px;border-radius:10px}#reference-preview[hidden]{display:none}@media(max-width:720px){main{grid-template-columns:1fr}header,main{padding:16px}}
 </style>
 <script src="/victorious-studio/studio.js" defer></script>
 </head>
@@ -20,7 +20,7 @@
 <label>Prompt<textarea id="positive" required maxlength="8000" placeholder="Describe your image"></textarea></label>
 <label>Negative prompt<textarea id="negative" maxlength="8000" placeholder="What should be avoided?"></textarea></label>
 <details open><summary>Character and reference settings</summary>
-<p class="muted">Optional. A compatible trained LoRA can improve identity consistency. Reference mode edits an image; it is not face-identity conditioning.</p>
+<p class="muted">Optional. A compatible trained LoRA can improve identity consistency. Choose editing or experimental PhotoMaker identity conditioning in Photo Studio.</p>
 <label>Character profile<select id="character"><option value="">No saved profile</option></select></label>
 <label>Profile name<input id="character-name" maxlength="80" placeholder="Character name"></label>
 <label>Character description<textarea id="character-description" maxlength="2000" placeholder="Reusable appearance and traits"></textarea></label>
@@ -34,6 +34,16 @@
 <label>Denoise for reference mode<input id="denoise" type="number" min="0.05" max="1" step=".05" value=".45" required></label>
 <p class="muted">Reference mode uses batch size 1. Use only images you have permission to use. Profiles are saved in this browser; uploaded images remain on the server.</p>
 <p id="character-status" role="status" aria-live="polite"></p>
+</details>
+<details open><summary>Photo Studio</summary>
+<label>Reference usage<select id="reference-mode"><option value="edit">Image-to-image editing</option><option value="identity">PhotoMaker identity (experimental SDXL)</option></select></label>
+<label>PhotoMaker model<select id="photomaker"><option value="">Select installed PhotoMaker model</option></select></label>
+<p class="muted">Identity mode uses the reference as conditioning rather than an initial latent. Use an SDXL checkpoint, one clear portrait and compatible PhotoMaker v1 weights. It cannot guarantee a matching face.</p>
+<label>Inpaint mask<select id="mask"><option value="">No mask</option></select></label>
+<p class="muted">Select a black-and-white mask from ComfyUI input images with the same size and framing as the reference. White = edit; black = preserve. Masked editing uses the reference in edit mode.</p>
+<label>Enhancement after generation<select id="upscale"><option value="">No enhancement</option><option value="resize">2× Lanczos resize (not AI)</option></select></label>
+<p class="muted">Installed AI upscalers use their native scale. High-resolution outputs can exceed available memory. Start with one image.</p>
+<p id="photo-status" role="status" aria-live="polite"></p>
 </details>
 <div class="fields">
 <label>Width<input id="width" type="number" min="256" max="1536" step="64" value="512" required></label>
