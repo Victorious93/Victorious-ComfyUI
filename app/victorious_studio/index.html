@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Victorious-ComfyUI | Studio</title>
+<style>
+:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#101116;color:#f0f0f5}*{box-sizing:border-box}body{margin:0}header,main{max-width:1120px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid #30313b}h1,h2,p{margin:0 0 12px}h1{font-size:1.5rem}h2{font-size:1.2rem}a{color:#b7b3ff}small,.muted{color:#b3b5c2}main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.panel{background:#1b1c24;border:1px solid #30313b;border-radius:18px;padding:20px}label{display:block;margin:12px 0}input,textarea,select,button{font:inherit;border-radius:10px;border:1px solid #454653;background:#111219;color:inherit;padding:10px;width:100%}textarea{resize:vertical;min-height:85px}button{cursor:pointer;background:#a49af7;color:#14121f;font-weight:700;margin-top:10px}button.secondary{background:#282936;color:#f0f0f5}button:disabled{opacity:.5;cursor:not-allowed}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #b7b3ff;outline-offset:2px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}#status{white-space:pre-wrap;overflow-wrap:anywhere}#gallery img{display:block;width:100%;height:auto;border-radius:12px;margin-top:16px}#hardware{overflow-wrap:anywhere}@media(max-width:720px){main{grid-template-columns:1fr}header,main{padding:16px}}
+</style>
+<script src="/victorious-studio/studio.js" defer></script>
+</head>
+<body>
+<header><div><h1>Victorious-ComfyUI</h1><small>Studio · local creation</small></div><a href="/">Advanced node editor</a></header>
+<main>
+<section class="panel"><h2>Create an image</h2><p class="muted">Use an installed SD 1.5 or SDXL all-in-one checkpoint. Other model families may require the advanced editor.</p>
+<form id="generate">
+<label>Checkpoint<select id="checkpoint" required><option value="">Loading models…</option></select></label>
+<button class="secondary" type="button" id="refresh">Refresh models and hardware</button>
+<label>Prompt<textarea id="positive" required maxlength="8000" placeholder="Describe your image"></textarea></label>
+<label>Negative prompt<textarea id="negative" maxlength="8000" placeholder="What should be avoided?"></textarea></label>
+<div class="fields">
+<label>Width<input id="width" type="number" min="256" max="1536" step="64" value="512" required></label>
+<label>Height<input id="height" type="number" min="256" max="1536" step="64" value="512" required></label>
+<label>Steps<input id="steps" type="number" min="1" max="80" value="20" required></label>
+<label>CFG<input id="cfg" type="number" min="1" max="20" step=".5" value="7" required></label>
+<label>Seed (blank = random)<input id="seed" type="number" min="0" max="4294967295" step="1" placeholder="Random"></label>
+<label>Batch size<input id="batch" type="number" min="1" max="4" value="1" required></label>
+</div>
+<button id="submit" disabled>Generate image</button>
+<button type="button" class="secondary" id="cancel" disabled>Cancel current job</button>
+</form></section>
+<section class="panel"><h2>Results</h2><p id="hardware" class="muted">Checking hardware…</p><p id="status" role="status" aria-live="polite">Connecting to ComfyUI…</p><div id="gallery"></div></section>
+</main>
+</body></html>
