@@ -37,6 +37,34 @@ LoRA support can reuse existing trained identities; it does not train new LoRAs 
 - Generate using a known compatible LoRA, reference image, and both together; inspect the graph, output and VRAM use.
 - Confirm text-only generation still works and reference mode rejects batches above one.
 
+## Photo Studio
+
+### Masked edits
+
+Select the reference image, choose Image-to-image editing, and select a matching black-and-white mask from the server input directory. The mask must share the original reference dimensions and framing; Studio does not automatically validate that correspondence. White areas are regenerated, black areas are composited back from the resized original. Both images are center-cropped to the output dimensions. Start at denoise 1 for a replacement, or experiment with lower values. The workflow uses VAEEncodeForInpaint and ImageCompositeMasked; it targets compatible SD 1.5/SDXL checkpoint workflows and not all specialist inpaint checkpoints.
+
+Masks may be uploaded using the existing reference upload control, then selected as masks after restoring the original reference selection. No automatic segmentation, brush editor or outpainting is provided yet. Optional postprocessing affects the full composited image.
+
+### PhotoMaker identity (experimental)
+
+Install compatible PhotoMaker v1 weights in the configured photomaker model directory, select a compatible SDXL checkpoint and a single clear authorized portrait, choose PhotoMaker identity, and select the installed weights. Use a short prompt and batch size 1 without a mask. Studio adds the required photomaker token and uses the native PhotoMakerLoader and PhotoMakerEncode nodes on the positive conditioning path. This creates an empty latent rather than editing the reference. PhotoMaker's encoder has its own token and architecture limitations: the 180-character UI check is only a conservative length guard, not a tokenizer guarantee. No dedicated identity-strength slider or identity similarity guarantee is provided. Do not assume PhotoMaker v2 or SD 1.5 compatibility.
+
+### Enhancement
+
+Choose 2× Lanczos resize for conventional interpolation or select an installed AI upscaler from the discovered upscale_models list. AI upscalers use the selected model's native scale. Enhancement is applied after decoding and any mask compositing, and only the final enhanced image is saved by the Studio workflow. Large images and multiple models can exhaust system RAM or VRAM; begin with a small image and a batch of one.
+
+The page discovers the needed nodes and model lists through object_info and rejects unavailable selections at submission time. It does not install dependencies or download weights automatically. Photo Studio selections are currently session settings, not saved in character profiles.
+
+### Regression and runtime testing
+
+With Node.js 18 or newer available for development, run:
+
+```sh
+node --test tests/victorious_studio_graph.test.cjs
+```
+
+This checks graph wiring and validation without needing GPU models. The runtime browser and model checks still require a configured ComfyUI installation: compare masked edits with the resized source; verify valid PhotoMaker conditioning on SDXL; check missing weights and incompatible settings; compare interpolated and learned-upscale output dimensions; and re-run ordinary text/image generation. Use a small batch to test memory behavior.
+
 ## Security and limitations
 
 No new dependencies, cloud services, telemetry, or external network requests are introduced by the Studio page. The Studio inherits the existing server's network trust model; it does not add authentication or multi-user isolation. Keep ComfyUI bound to loopback unless a properly authenticated and authorized gateway is configured. Do not expose the raw server publicly.
@@ -55,8 +83,8 @@ This milestone tracks one job per browser page. Refreshing or closing the page l
 
 ## Next milestones
 
-- Server-side character library, dedicated identity conditioning and LoRA training.
-- Advanced image editing, pose and identity conditioning.
+- Server-side character library, validated identity workflows and LoRA training.
+- Interactive mask editing, outpainting, pose control and background segmentation.
 - Model-aware workflow presets, local model management and memory-aware guidance.
 - Video workflows and optional training integrations.
 - Authenticated fleet integration with VictorLinux, DroidCommand-AI, VictorBots and Victorious Mesh.
