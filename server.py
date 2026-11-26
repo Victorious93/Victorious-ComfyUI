@@ -1389,6 +1389,19 @@ class PromptServer():
         async def get_user_css(request):
             return user_css_file_response(os.path.join(self.web_root, "user.css"))
         self.app.router.add_get("/user.css", get_user_css)
+
+        # Victorious Studio is served separately from the upstream frontend.
+        studio_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "victorious_studio")
+
+        async def get_studio(request):
+            return web.FileResponse(os.path.join(studio_root, "index.html"))
+
+        async def get_studio_script(request):
+            return web.FileResponse(os.path.join(studio_root, "studio.js"))
+
+        self.app.router.add_get("/victorious-studio", get_studio)
+        self.app.router.add_get("/victorious-studio/", get_studio)
+        self.app.router.add_get("/victorious-studio/studio.js", get_studio_script)
         self.app.add_routes([
             web.static('/', self.web_root),
         ])

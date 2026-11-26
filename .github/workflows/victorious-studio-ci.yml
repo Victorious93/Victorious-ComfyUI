@@ -1,0 +1,30 @@
+name: Victorious Studio CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  studio-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: JavaScript syntax
+        run: node --check app/victorious_studio/studio.js
+      - name: Studio graph regression tests
+        run: node --test tests/victorious_studio_graph.test.cjs
+      - name: Python server syntax
+        run: python -m py_compile server.py
