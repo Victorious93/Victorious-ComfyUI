@@ -107,6 +107,8 @@ class Bridge:
     def __init__(self, database, checkpoint, call=upstream, fetch=upstream_bytes):
         self.db = sqlite3.connect(database)
         self.db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, digest TEXT NOT NULL, upstream_id TEXT NOT NULL, state TEXT NOT NULL)")
+        if "artifact_version" not in {row[1] for row in self.db.execute("PRAGMA table_info(jobs)")}:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN artifact_version INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
         self.checkpoint, self.call, self.fetch = checkpoint, call, fetch
 
@@ -129,11 +131,13 @@ class Bridge:
 
     def artifact(self, ident):
         ident = job_id(ident)
-        row = self.db.execute("SELECT upstream_id, state FROM jobs WHERE id=?", (ident,)).fetchone()
+        row = self.db.execute("SELECT upstream_id, state, artifact_version FROM jobs WHERE id=?", (ident,)).fetchone()
         if not row:
             raise KeyError("unknown job")
         if row[1] != "completed":
             raise ValueError("job is not confirmed completed; check image_status")
+        if row[2] != 1:
+            raise ValueError("legacy output is available on the PC only")
         history = self.call("/history/" + row[0])
         images = history.get(row[0], {}).get("outputs", {}).get("7", {}).get("images", [])
         if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
@@ -143,7 +147,7 @@ class Bridge:
         # Only the SaveImage node of this fixed graph and its root output file.
         if (image.get("type") != "output" or image.get("subfolder", "") != ""
                 or not isinstance(filename, str)
-                or not re.fullmatch(r"Victorious-Fleet_[0-9]+_\.png", filename)):
+                or not re.fullmatch(re.escape("Victorious-Fleet-" + row[0]) + r"_[0-9]+_\.png", filename)):
             raise RuntimeError("invalid artifact descriptor")
         data = self.fetch("/view?" + urlencode({"filename": filename, "type": "output"}), limit=MAX_IMAGE)
         if len(data) > MAX_IMAGE or not data.startswith(PNG_SIGNATURE):
@@ -154,7 +158,7 @@ class Bridge:
         if not isinstance(args, dict):
             raise ValueError("arguments must be an object")
         ident = job_id(args.get("request_id"))
-        row = self.db.execute("SELECT digest, upstream_id, state FROM jobs WHERE id=?", (ident,)).fetchone()
+        row = self.db.execute("SELECT digest, upstream_id, state, artifact_version FROM jobs WHERE id=?", (ident,)).fetchone()
         if name == "generate_image":
             workflow = graph(self.checkpoint, args)
             digest = hashlib.sha256(json.dumps(workflow, sort_keys=True).encode()).hexdigest()
@@ -179,7 +183,9 @@ class Bridge:
                     raise ValueError("job ledger full; owner maintenance required")
                 if self.db.execute("SELECT 1 FROM jobs WHERE state IN ('reserved','pending','in_progress','unknown')").fetchone():
                     raise ValueError("another job is active or unconfirmed; check its status first")
-                self.db.execute("INSERT INTO jobs VALUES (?,?,?,?)", (ident, digest, upstream_id, "reserved"))
+                self.db.execute("INSERT INTO jobs (id,digest,upstream_id,state,artifact_version) VALUES (?,?,?,?,1)",
+                                (ident, digest, upstream_id, "reserved"))
+            workflow["7"]["inputs"]["filename_prefix"] = "Victorious-Fleet-" + upstream_id
             # Persist the reservation before sending. Never retry ambiguous submissions.
             try:
                 reply = self.call("/prompt", {"prompt": workflow, "prompt_id": upstream_id})
@@ -199,9 +205,11 @@ class Bridge:
         if name == "image_status":
             state = self.refresh_state(ident, upstream_id, state)
             result = {"request_id": ident, "status": state}
-            if state == "completed":
+            if state == "completed" and row[3] == 1:
                 result["artifact_path"] = "/artifacts/" + ident
                 result["note"] = "Use authenticated GET; output may expire if history or files are removed."
+            elif state == "completed":
+                result["note"] = "Legacy output is available on the PC only."
             return result
         if name == "cancel_image":
             if state in TERMINAL:
