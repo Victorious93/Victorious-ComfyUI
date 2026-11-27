@@ -16,17 +16,36 @@ This optional standalone Python service connects DroidCommand-AI's existing HTTP
 ## Tools
 
 - `generate_image`: canonical UUID request_id, prompt, optional negative, width, height, steps, seed. Queues one image (256–1024 in multiples of 64, up to 60 steps). Returns quickly with pending or unknown; no synchronous generation.
-- `image_status`: same request_id; reports last confirmed state, or unknown if status cannot be confirmed. Completed images remain in the configured PC output directory.
+- `image_status`: same request_id; reports last confirmed state, or unknown if status cannot be confirmed. Completed images remain in the configured PC output directory. New jobs also report an authenticated artifact path.
 - `cancel_image`: same request_id; requests scoped cancellation, then check status. The cancellation response alone does not prove completion.
 
 The request UUID is distinct from the private upstream UUID. Retrying the same ID and settings does not resubmit, including after restarting the bridge. Changing settings under the same ID is rejected. The SQLite ledger reserves IDs before making a request. A timeout can leave the outcome unknown; never submit a fresh ID merely to retry. If the upstream loses the job history or a submission never reached it, the bridge fails closed and requires owner reconciliation. Stop the bridge and back up its ledger before any manual maintenance; verify the local queue has no unresolved job before resetting anything.
 
+## Download a completed image
+
+After `image_status` returns `completed` and an `artifact_path`, a trusted client can make an authenticated GET to that path on the **same configured bridge origin**, using the same bearer token. For example, with an already configured token and actual job ID:
+
+```sh
+curl --fail --show-error --silent \
+  -H "Authorization: Bearer $VICTORIOUS_MEDIA_TOKEN" \
+  -D response-headers.txt \
+  -o image.png \
+  "https://YOUR_TRUSTED_BRIDGE/artifacts/YOUR_REQUEST_UUID"
+sha256sum image.png
+```
+
+Compare the computed SHA-256 with the response's `X-Content-SHA256` header. Use a certificate trusted by the client; never disable TLS verification. Avoid putting secrets in shell history and use a protected token source. The example is a manual client operation, not a new Android download feature. DroidCommand's current MCP client returns textual status and does not automatically fetch this binary.
+
+Downloads are limited to 16 MiB, authenticated, not browser-cacheable, and restricted to the single SaveImage result belonging to the requested completed job. The server assigns each new job a unique output prefix based on its private upstream UUID and rejects mismatching names and subfolders. Existing pre-upgrade ledger records continue to report status but their files must be retrieved locally on the PC. Artifact availability depends on the upstream history and output files still existing; a completed status alone does not guarantee download success. The SHA-256 covers the bytes returned, not a historical immutable snapshot.
+
+When a new job is requested, the bridge rechecks prior pending or unknown jobs and frees capacity only after a confirmed terminal status. Unknown and reserved outcomes still fail closed; for a reserved job after a crash, explicitly query its status first. No ambiguous submission is automatically repeated. Run one bridge process per ledger.
+
 ## Security and limitations
 
-Single-owner service, one bearer token shared by explicitly authorized clients; all holders can access bridge jobs if they know their request IDs. No multi-user authorization, rate-limit service, artifact download, arbitrary graph execution, remote file paths, shell access, training or video. The serial server allows one unconfirmed/active job at a time and at most 10,000 ledger entries; owner maintenance is required once full. Prompts are not persisted in the bridge ledger, but ComfyUI may persist them in history and output metadata. The bridge doesn't contact a cloud provider or use environment proxy settings. No browser Origin requests accepted. TLS is required for direct non-loopback binding; keep the host firewall restricted. The bridge is not automatically started or installed.
+Single-owner service, one bearer token shared by explicitly authorized clients; all holders can access bridge jobs if they know their request IDs. No multi-user authorization, rate-limit service, arbitrary graph execution, client-supplied remote file paths, shell access, training or video. The serial server allows one unconfirmed/active job at a time and at most 10,000 ledger entries; owner maintenance is required once full. Prompts are not persisted in the bridge ledger, but ComfyUI may persist them in history and output metadata. The bridge doesn't contact a cloud provider or use environment proxy settings. No browser Origin requests accepted. TLS is required for direct non-loopback binding; keep the host firewall restricted. The bridge is not automatically started or installed.
 
 ## Tests
 
 `python tests/test_victorious_media_mcp.py -v`
 
-Fixture-based tests exercise argument validation, idempotency across restart, uncertain submission, scoped cancellation and the MCP message contract. Real TLS connectivity, Android client approval flow and GPU generation still need end-to-end testing.
+Fixture-based tests exercise argument validation, idempotency across restart, uncertain submission, scoped cancellation, capacity recovery, legacy migration, job-specific artifact validation, real loopback HTTP authentication and digest headers, and the MCP message contract. Real TLS connectivity, Android client approval flow and GPU generation still need end-to-end testing.
