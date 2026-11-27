@@ -1,6 +1,9 @@
+import hashlib
+import http.client
 import importlib.util
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 import uuid
 
@@ -78,6 +81,86 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(result["result"]["tools"]), 3)
         self.assertFalse(result["result"]["tools"][0]["annotations"]["readOnlyHint"])
         self.assertIsNone(media.rpc(self.bridge, {"jsonrpc": "2.0", "method": "notifications/initialized"}))
+
+
+    def test_completed_job_releases_capacity_automatically(self):
+        self.bridge.tool("generate_image", self.args)
+        self.status = "completed"
+        next_id = str(uuid.uuid4())
+        self.assertEqual(self.bridge.tool("generate_image", dict(self.args, request_id=next_id))["status"], "pending")
+        self.assertEqual(self.bridge.tool("image_status", {"request_id": self.args["request_id"]})["status"], "completed")
+
+    def test_artifact_only_from_completed_owned_job(self):
+        self.bridge.tool("generate_image", self.args)
+        ident = self.args["request_id"]
+        with self.assertRaises(ValueError):
+            self.bridge.artifact(ident)
+        with self.assertRaises(KeyError):
+            self.bridge.artifact(str(uuid.uuid4()))
+        self.status = "completed"
+        self.assertEqual(self.bridge.tool("image_status", {"request_id": ident})["artifact_path"], "/artifacts/" + ident)
+        remote = self.calls[0][1]["prompt_id"]
+        descriptor = {"filename": "Victorious-Fleet_00001_.png", "type": "output", "subfolder": ""}
+        self.bridge.call = lambda path: {remote: {"outputs": {"7": {"images": [descriptor]}}}}
+        def fetch(path, limit):
+            self.assertEqual(path, "/view?filename=Victorious-Fleet_00001_.png&type=output")
+            self.assertEqual(limit, media.MAX_IMAGE)
+            return media.PNG_SIGNATURE + b"fixture"
+        self.bridge.fetch = fetch
+        self.assertEqual(self.bridge.artifact(ident), media.PNG_SIGNATURE + b"fixture")
+        for bad in ({"filename": "../private.png"}, {"subfolder": "other"}, {"type": "input"},
+                    {"filename": "Unrelated_00001_.png"}):
+            original = descriptor.copy()
+            descriptor.update(bad)
+            with self.assertRaises(RuntimeError):
+                self.bridge.artifact(ident)
+            descriptor.clear()
+            descriptor.update(original)
+        self.bridge.fetch = lambda *a, **kw: b"not png"
+        with self.assertRaises(RuntimeError):
+            self.bridge.artifact(ident)
+
+
+class HttpArtifactTests(unittest.TestCase):
+    def test_authenticated_artifact_response(self):
+        ident = str(uuid.uuid4())
+        payload = media.PNG_SIGNATURE + b"fixture"
+
+        class FixtureBridge:
+            def artifact(self, value):
+                if value != ident:
+                    raise KeyError(value)
+                return payload
+
+        server = media.HTTPServer(("127.0.0.1", 0), media.Handler)
+        server.bridge = FixtureBridge()
+        token = "Bearer " + "a" * 40
+        server.auth_digest = hashlib.sha256(token.encode()).digest()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            def get(path, headers):
+                conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                try:
+                    conn.request("GET", path, headers=headers)
+                    response = conn.getresponse()
+                    return response.status, dict(response.getheaders()), response.read()
+                finally:
+                    conn.close()
+            path = "/artifacts/" + ident
+            self.assertEqual(get(path, {})[0], 401)
+            self.assertEqual(get(path, {"Authorization": token, "Origin": "https://untrusted.invalid"})[0], 403)
+            self.assertEqual(get(path + "?filename=private.png", {"Authorization": token})[0], 404)
+            self.assertEqual(get("/artifacts/" + str(uuid.uuid4()), {"Authorization": token})[0], 404)
+            code, headers, data = get(path, {"Authorization": token})
+            self.assertEqual(code, 200)
+            self.assertEqual(data, payload)
+            self.assertEqual(headers["X-Content-SHA256"], hashlib.sha256(payload).hexdigest())
+            self.assertEqual(headers["Cache-Control"], "no-store")
+        finally:
+            server.shutdown()
+            thread.join(timeout=3)
+            server.server_close()
 
 
 if __name__ == "__main__":
