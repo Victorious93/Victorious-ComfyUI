@@ -27,4 +27,6 @@ jobs:
       - name: Studio graph regression tests
         run: node --test tests/victorious_studio_graph.test.cjs
       - name: Python server syntax
-        run: python -m py_compile server.py
+        run: python -m py_compile server.py script_examples/victorious_media_mcp.py
+      - name: Fleet media bridge regression tests
+        run: python tests/test_victorious_media_mcp.py -v
