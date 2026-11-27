@@ -100,16 +100,18 @@ class BridgeTests(unittest.TestCase):
         self.status = "completed"
         self.assertEqual(self.bridge.tool("image_status", {"request_id": ident})["artifact_path"], "/artifacts/" + ident)
         remote = self.calls[0][1]["prompt_id"]
-        descriptor = {"filename": "Victorious-Fleet_00001_.png", "type": "output", "subfolder": ""}
+        filename = "Victorious-Fleet-" + remote + "_00001_.png"
+        self.assertEqual(self.calls[0][1]["prompt"]["7"]["inputs"]["filename_prefix"], "Victorious-Fleet-" + remote)
+        descriptor = {"filename": filename, "type": "output", "subfolder": ""}
         self.bridge.call = lambda path: {remote: {"outputs": {"7": {"images": [descriptor]}}}}
         def fetch(path, limit):
-            self.assertEqual(path, "/view?filename=Victorious-Fleet_00001_.png&type=output")
+            self.assertEqual(path, "/view?filename=" + filename + "&type=output")
             self.assertEqual(limit, media.MAX_IMAGE)
             return media.PNG_SIGNATURE + b"fixture"
         self.bridge.fetch = fetch
         self.assertEqual(self.bridge.artifact(ident), media.PNG_SIGNATURE + b"fixture")
         for bad in ({"filename": "../private.png"}, {"subfolder": "other"}, {"type": "input"},
-                    {"filename": "Unrelated_00001_.png"}):
+                    {"filename": "Victorious-Fleet-" + str(uuid.uuid4()) + "_00001_.png"}):
             original = descriptor.copy()
             descriptor.update(bad)
             with self.assertRaises(RuntimeError):
@@ -119,6 +121,21 @@ class BridgeTests(unittest.TestCase):
         self.bridge.fetch = lambda *a, **kw: b"not png"
         with self.assertRaises(RuntimeError):
             self.bridge.artifact(ident)
+
+
+    def test_legacy_ledger_does_not_export_unbound_output(self):
+        self.bridge.db.close()
+        self.path.unlink()
+        import sqlite3
+        with sqlite3.connect(self.path) as db:
+            db.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, digest TEXT NOT NULL, upstream_id TEXT NOT NULL, state TEXT NOT NULL)")
+            db.execute("INSERT INTO jobs VALUES (?,?,?,?)", (self.args["request_id"], "digest", str(uuid.uuid4()), "completed"))
+        self.bridge = media.Bridge(self.path, "owner.safetensors", self.fake)
+        result = self.bridge.tool("image_status", {"request_id": self.args["request_id"]})
+        self.assertEqual(result["status"], "completed")
+        self.assertNotIn("artifact_path", result)
+        with self.assertRaises(ValueError):
+            self.bridge.artifact(self.args["request_id"])
 
 
 class HttpArtifactTests(unittest.TestCase):
