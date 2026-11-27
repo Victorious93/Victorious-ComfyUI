@@ -9,33 +9,41 @@ import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import ssl
+from urllib.parse import urlencode
 import uuid
 
 MAX_BODY = 16384
 MAX_REPLY = 2 * 1024 * 1024
+MAX_IMAGE = 16 * 1024 * 1024
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 ACTIVE = ("reserved", "pending", "in_progress", "unknown")
 TERMINAL = ("completed", "failed", "cancelled")
 
 
-def upstream(path, body=None):
+def upstream_bytes(path, body=None, limit=MAX_REPLY):
     conn = http.client.HTTPConnection("127.0.0.1", 8188, timeout=5)
     try:
         conn.request("GET" if body is None else "POST", path,
                      None if body is None else json.dumps(body),
                      {} if body is None else {"Content-Type": "application/json"})
         response = conn.getresponse()
-        data = response.read(MAX_REPLY + 1)
-        if response.status != 200 or len(data) > MAX_REPLY:
+        data = response.read(limit + 1)
+        if response.status != 200 or len(data) > limit:
             raise RuntimeError("upstream request not confirmed")
-        value = json.loads(data)
-        if not isinstance(value, dict):
-            raise RuntimeError("invalid upstream response")
-        return value
+        return data
     finally:
         conn.close()
+
+
+def upstream(path, body=None):
+    value = json.loads(upstream_bytes(path, body))
+    if not isinstance(value, dict):
+        raise RuntimeError("invalid upstream response")
+    return value
 
 
 def schema(properties, required=()):
@@ -55,7 +63,7 @@ TOOLS = [
          "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295}},
          ("request_id", "prompt")),
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}},
-    {"name": "image_status", "description": "Check one bridge-owned job; completed output stays on the PC.",
+    {"name": "image_status", "description": "Check one bridge-owned job; completed output can be downloaded through the authenticated artifact endpoint.",
      "inputSchema": schema({"request_id": UUID_FIELD}, ("request_id",)),
      "annotations": {"readOnlyHint": True, "openWorldHint": False}},
     {"name": "cancel_image", "description": "Request cancellation of one bridge-owned job. Does not interrupt other jobs.",
@@ -96,15 +104,51 @@ def graph(checkpoint, args):
 
 
 class Bridge:
-    def __init__(self, database, checkpoint, call=upstream):
+    def __init__(self, database, checkpoint, call=upstream, fetch=upstream_bytes):
         self.db = sqlite3.connect(database)
         self.db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, digest TEXT NOT NULL, upstream_id TEXT NOT NULL, state TEXT NOT NULL)")
         self.db.commit()
-        self.checkpoint, self.call = checkpoint, call
+        self.checkpoint, self.call, self.fetch = checkpoint, call, fetch
 
     def update(self, ident, state):
         with self.db:
             self.db.execute("UPDATE jobs SET state=? WHERE id=?", (state, ident))
+
+    def refresh_state(self, ident, upstream_id, state):
+        if state in TERMINAL:
+            return state
+        try:
+            result = self.call("/api/jobs/" + upstream_id)
+            state = result.get("status")
+            if state not in ("pending", "in_progress") + TERMINAL:
+                raise RuntimeError("unknown status")
+        except Exception:
+            state = "unknown"
+        self.update(ident, state)
+        return state
+
+    def artifact(self, ident):
+        ident = job_id(ident)
+        row = self.db.execute("SELECT upstream_id, state FROM jobs WHERE id=?", (ident,)).fetchone()
+        if not row:
+            raise KeyError("unknown job")
+        if row[1] != "completed":
+            raise ValueError("job is not confirmed completed; check image_status")
+        history = self.call("/history/" + row[0])
+        images = history.get(row[0], {}).get("outputs", {}).get("7", {}).get("images", [])
+        if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
+            raise RuntimeError("expected exactly one saved output")
+        image = images[0]
+        filename = image.get("filename")
+        # Only the SaveImage node of this fixed graph and its root output file.
+        if (image.get("type") != "output" or image.get("subfolder", "") != ""
+                or not isinstance(filename, str)
+                or not re.fullmatch(r"Victorious-Fleet_[0-9]+_\.png", filename)):
+            raise RuntimeError("invalid artifact descriptor")
+        data = self.fetch("/view?" + urlencode({"filename": filename, "type": "output"}), limit=MAX_IMAGE)
+        if len(data) > MAX_IMAGE or not data.startswith(PNG_SIGNATURE):
+            raise RuntimeError("invalid or oversized PNG output")
+        return data
 
     def tool(self, name, args):
         if not isinstance(args, dict):
@@ -118,12 +162,23 @@ class Bridge:
                 if row[0] != digest:
                     raise ValueError("request ID already used for different settings")
                 return {"request_id": ident, "status": row[2], "duplicate": True}
-            if self.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] >= 10000:
-                raise ValueError("job ledger full; owner maintenance required")
-            if self.db.execute("SELECT 1 FROM jobs WHERE state IN ('reserved','pending','in_progress','unknown')").fetchone():
-                raise ValueError("another job is active or unconfirmed; check its status first")
+            # Release a stale capacity slot only after a terminal upstream report.
+            # The reservation may belong to another process still submitting, so never query reserved rows here.
+            active = self.db.execute("SELECT id, upstream_id, state FROM jobs WHERE state IN ('pending','in_progress','unknown')").fetchall()
+            for active_id, remote_id, state in active:
+                self.refresh_state(active_id, remote_id, state)
             upstream_id = str(uuid.uuid4())
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                existing = self.db.execute("SELECT digest, state FROM jobs WHERE id=?", (ident,)).fetchone()
+                if existing:
+                    if existing[0] != digest:
+                        raise ValueError("request ID already used for different settings")
+                    return {"request_id": ident, "status": existing[1], "duplicate": True}
+                if self.db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] >= 10000:
+                    raise ValueError("job ledger full; owner maintenance required")
+                if self.db.execute("SELECT 1 FROM jobs WHERE state IN ('reserved','pending','in_progress','unknown')").fetchone():
+                    raise ValueError("another job is active or unconfirmed; check its status first")
                 self.db.execute("INSERT INTO jobs VALUES (?,?,?,?)", (ident, digest, upstream_id, "reserved"))
             # Persist the reservation before sending. Never retry ambiguous submissions.
             try:
@@ -142,18 +197,12 @@ class Bridge:
             raise ValueError("unknown bridge job")
         upstream_id, state = row[1], row[2]
         if name == "image_status":
-            if state not in TERMINAL:
-                try:
-                    result = self.call("/api/jobs/" + upstream_id)
-                    reported = result.get("status")
-                    if reported not in ("pending", "in_progress") + TERMINAL:
-                        raise RuntimeError("unknown status")
-                    state = reported
-                except Exception:
-                    state = "unknown"
-                self.update(ident, state)
-            return {"request_id": ident, "status": state,
-                    "note": "Completed images are stored in the PC's configured ComfyUI output folder."}
+            state = self.refresh_state(ident, upstream_id, state)
+            result = {"request_id": ident, "status": state}
+            if state == "completed":
+                result["artifact_path"] = "/artifacts/" + ident
+                result["note"] = "Use authenticated GET; output may expire if history or files are removed."
+            return result
         if name == "cancel_image":
             if state in TERMINAL:
                 return {"request_id": ident, "status": state, "cancel_requested": False}
@@ -217,15 +266,46 @@ class Handler(BaseHTTPRequestHandler):
         if data:
             self.wfile.write(data)
 
-    def do_POST(self):
-        if self.path != "/mcp":
-            return self.reply(404)
+    def authorized(self):
         if self.headers.get("Origin") is not None:
-            return self.reply(403)
+            self.reply(403)
+            return False
         supplied = self.headers.get("Authorization", "")
         digest = hashlib.sha256(supplied.encode()).digest()
         if not hmac.compare_digest(digest, self.server.auth_digest):
-            return self.reply(401)
+            self.reply(401)
+            return False
+        return True
+
+    def do_GET(self):
+        if not self.authorized():
+            return
+        match = re.fullmatch(r"/artifacts/([0-9a-f-]{36})", self.path)
+        if not match:
+            return self.reply(404)
+        try:
+            data = self.server.bridge.artifact(match[1])
+        except KeyError:
+            return self.reply(404)
+        except ValueError:
+            return self.reply(409)
+        except Exception:
+            return self.reply(502, {"error": "Artifact unavailable; check PC output and history."})
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Disposition", 'attachment; filename="victorious-image.png"')
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Content-SHA256", hashlib.sha256(data).hexdigest())
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):
+        if self.path != "/mcp":
+            return self.reply(404)
+        if not self.authorized():
+            return
         if self.headers.get("Transfer-Encoding") or self.headers.get_content_type() != "application/json":
             return self.reply(400)
         try:
